@@ -52,7 +52,8 @@ pub fn main() anyerror!void {
     var surface: wb.WGPUSurface = undefined;
 
     if (builtin.os.tag == .windows) {
-        var hwnd = glfw.native.getWin32Window(window);
+        const native = glfw.Native(.{ .win32 = true });
+        var hwnd = native.getWin32Window(window);
         var hinstance = kn.GetModuleHandleW(null);
         surface = wgpu.wgpuInstanceCreateSurface(.null_handle, &.{
             .label = null,
@@ -66,8 +67,9 @@ pub fn main() anyerror!void {
             }),
         });
     } else {
-        var display = glfw.native.getX11Display();
-        var xwindow = glfw.native.getX11Window(window);
+        const native = glfw.Native(.{ .x11 = true });
+        var display = native.getX11Display();
+        var xwindow = native.getX11Window(window);
         surface = wgpu.wgpuInstanceCreateSurface(.null_handle, &.{
             .label = null,
             .nextInChain = wb.toChainedStruct(&wb.WGPUSurfaceDescriptorFromXlib{
