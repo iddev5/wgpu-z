@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const glfw = @import("glfw");
 const kn = std.os.windows.kernel32;
 const wb = @import("wgpu_binding.zig");
@@ -10,7 +11,7 @@ fn requestAdapterCallback(
     status: wb.WGPURequestAdapterStatus,
     received: wb.WGPUAdapter,
     message: [*:0]const u8,
-    userdata: *c_void,
+    userdata: *anyopaque,
 ) callconv(.C) void {
     _ = status;
     _ = message;
@@ -21,14 +22,21 @@ fn requestDeviceCallback(
     status: wb.WGPURequestDeviceStatus,
     received: wb.WGPUDevice,
     message: [*:0]const u8,
-    userdata: *c_void,
+    userdata: *anyopaque,
 ) callconv(.C) void {
     _ = status;
     _ = message;
     @ptrCast(*wb.WGPUDevice, @alignCast(@alignOf(wb.WGPUDevice), userdata)).* = received;
 }
 pub fn main() anyerror!void {
-    var lib = try DynLib.open("libs/libwgpu.dll");
+    const lib_file = blk: {
+        if (builtin.os.tag == .windows) {
+            break :blk "libs/libwgpu.dll";
+        } else {
+            break :blk "libs/libwgpu.so";
+        }
+    };
+    var lib = try DynLib.open(lib_file);
     defer lib.close();
     // dynamic load fn pointer
     const wgpu = try loadAllFromDynLib(&lib);
@@ -41,26 +49,44 @@ pub fn main() anyerror!void {
     const window = try glfw.Window.create(width, height, "webgpu", null, null, .{
         .client_api = .no_api,
     });
-    var hwnd = glfw.c.glfwGetWin32Window(window.handle);
-    var hinstance = kn.GetModuleHandleW(null);
-    const surface = wgpu.wgpuInstanceCreateSurface(.null_handle, &.{
-        .label = null,
-        .nextInChain = wb.toChainedStruct(&wb.WGPUSurfaceDescriptorFromWindowsHWND{
-            .chain = .{
-                .next = null,
-                .sType = .SurfaceDescriptorFromWindowsHWND,
-            },
-            .hinstance = hinstance,
-            .hwnd = hwnd,
-        }),
-    });
+    var surface: wb.WGPUSurface = undefined;
+
+    if (builtin.os.tag == .windows) {
+        var hwnd = glfw.native.getWin32Window(window);
+        var hinstance = kn.GetModuleHandleW(null);
+        surface = wgpu.wgpuInstanceCreateSurface(.null_handle, &.{
+            .label = null,
+            .nextInChain = wb.toChainedStruct(&wb.WGPUSurfaceDescriptorFromWindowsHWND{
+                .chain = .{
+                    .next = null,
+                    .sType = .SurfaceDescriptorFromWindowsHWND,
+                },
+                .hinstance = hinstance,
+                .hwnd = hwnd,
+            }),
+        });
+    } else {
+        var display = glfw.native.getX11Display();
+        var xwindow = glfw.native.getX11Window(window);
+        surface = wgpu.wgpuInstanceCreateSurface(.null_handle, &.{
+            .label = null,
+            .nextInChain = wb.toChainedStruct(&wb.WGPUSurfaceDescriptorFromXlib{
+                .chain = .{
+                    .next = null,
+                    .sType = .SurfaceDescriptorFromXlib,
+                },
+                .display = display,
+                .window = @intCast(u32, xwindow),
+            }),
+        });
+    }
     var adapter: wb.WGPUAdapter = undefined;
     wgpu.wgpuInstanceRequestAdapter(.null_handle, &.{
         .nextInChain = null,
         .compatibleSurface = surface,
         .powerPreference = undefined,
         .forceFallbackAdapter = undefined,
-    }, requestAdapterCallback, @ptrCast(*c_void, &adapter));
+    }, requestAdapterCallback, @ptrCast(*anyopaque, &adapter));
 
     var device: wb.WGPUDevice = undefined;
     wgpu.wgpuAdapterRequestDevice(adapter, &.{
@@ -78,7 +104,7 @@ pub fn main() anyerror!void {
         },
         .requiredFeaturesCount = 0,
         .requiredFeatures = undefined,
-    }, requestDeviceCallback, @ptrCast(*c_void, &device));
+    }, requestDeviceCallback, @ptrCast(*anyopaque, &device));
 
     const shader = wgpu.wgpuDeviceCreateShaderModule(device, &.{
         .nextInChain = wb.toChainedStruct(&wb.WGPUShaderModuleWGSLDescriptor{
